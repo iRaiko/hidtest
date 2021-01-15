@@ -286,8 +286,10 @@ fn main() -> Result<(), SomethingSomething>
             3, // OPEN_EXISTING
             0, //
             std::ptr::null_mut() // No template necessary
-        )?;
-    
+        );
+        
+        if let Ok(valid_device_handle) = valid_device_handle
+        {
             // Error 5 Error_access_Denied -> Access is denied
             // Error 32 Error Sharing Violation -> Process being used by another process
 
@@ -304,7 +306,7 @@ fn main() -> Result<(), SomethingSomething>
 
                 if device.caps.usage_id == 5
                 {                
-                    read_data(&device)?;
+                    println!("{:?}", read_data(&device)?);
                 }
             }
             else
@@ -312,7 +314,7 @@ fn main() -> Result<(), SomethingSomething>
                 Check!("Get Preparsed data");
             }
             unsafe { CloseHandle(valid_device_handle)};
-        
+        }
     }
     unsafe { hid_guid.assume_init() };
     unsafe { SetupDiDestroyDeviceInfoList(device_info_list_handle) };
@@ -388,7 +390,8 @@ fn create_file_w(
     }
     else
     {
-        return Err(SomethingSomething::WinError(windows_error.to_string()))
+        let win_err = format!("windows error: {}, at create_file_w", windows_error);
+        return Err(SomethingSomething::WinError(win_err))
     }
 
 }
