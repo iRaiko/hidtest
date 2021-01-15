@@ -246,31 +246,8 @@ fn main() -> Result<(), SomethingSomething>
     {
         let p_interface_data: *mut SP_DEVICE_INTERFACE_DATA = &mut interface_data[i];
         
-        let mut required_size = 0u32;
-
-        let p_required_size: *mut u32 = &mut required_size;
-
-        unsafe { SetupDiGetDeviceInterfaceDetailA(
-            device_info_list_handle, 
-            p_interface_data as *mut Void,
-            std::ptr::null_mut(), 
-            0, 
-            p_required_size, 
-            std::ptr::null_mut()) };
-        
-        let mut data = SP_DEVICE_INTERFACE_DETAIL_DATA_A { cb_size: 8 as u32, device_path: [0;256]};
-
-        let p_data: *mut SP_DEVICE_INTERFACE_DETAIL_DATA_A = &mut data;
-
-        unsafe { SetupDiGetDeviceInterfaceDetailA(
-            device_info_list_handle, 
-            p_interface_data as *mut Void,
-            p_data as *mut Void, 
-            required_size, 
-            p_required_size, 
-            std::ptr::null_mut()) };
-        Check!("SetupDiGetDeviceInterfaceDetailA 2");
-
+        if let Ok(data) = setup_di_get_device_interface_detail_a(device_info_list_handle, p_interface_data as *mut Void)
+        {
         let n = String::from_utf8(data.device_path.to_vec())?;
 
         let n_ref = n.trim_matches('\u{0}');
@@ -315,6 +292,7 @@ fn main() -> Result<(), SomethingSomething>
             }
             unsafe { CloseHandle(valid_device_handle)};
         }
+    }
     }
     unsafe { hid_guid.assume_init() };
     unsafe { SetupDiDestroyDeviceInfoList(device_info_list_handle) };
@@ -396,32 +374,53 @@ fn create_file_w(
 
 }
 
-// fn setup_di_get_device_interface_detail_w(
-//     DeviceInfoSet: *mut Void, 
-//     DeviceInterfaceData: *mut Void, 
-//     DeviceInterfaceDetailData: *mut Void,
-//     DeviceInterfaceDetailDataSize: DWord,
-//     RequiredSize: *const DWord,
-//     DeviceInfoData: *mut Void
-// ) -> Result<(), String>
-// {
-//     if unsafe { !SetupDiGetDeviceInterfaceDetailW(DeviceInfoSet, DeviceInterfaceData, DeviceInterfaceDetailData, DeviceInterfaceDetailDataSize, RequiredSize, DeviceInfoData)}
-//     {
-//         let expected_errors = [0];
+fn setup_di_get_device_interface_detail_a(
+    device_info_list_handle: *mut Void, 
+    p_interface_data: *mut Void, 
+) -> Result<SP_DEVICE_INTERFACE_DETAIL_DATA_A, SomethingSomething>
+{
+    let mut required_size = 0u32;
+    let p_required_size: *mut u32 = &mut required_size;
 
-//         let windows_error = unsafe { GetLastError() };
+    unsafe { SetupDiGetDeviceInterfaceDetailA(
+        device_info_list_handle, 
+        p_interface_data as *mut Void,
+        std::ptr::null_mut(), 
+        0, 
+        p_required_size, 
+        std::ptr::null_mut()) };
+    
+    let windows_error = unsafe { GetLastError() };
+    if windows_error != 122
+    {
+        let error_line = line!();
+        let win_err = format!("Windows Error: {} at line: {}", windows_error, error_line);
+        return Err(SomethingSomething::WinError(win_err))
+    }
 
-//         if expected_errors.contains(&windows_error)
-//         {
-//             return Ok(())
-//         }
-//         else
-//         {
-//             return Err("".to_owned());
-//         }
-//     }
-//     Ok(())
-// }
+    let mut data = SP_DEVICE_INTERFACE_DETAIL_DATA_A { cb_size: 8 as u32, device_path: [0;256]};
+
+    let p_data: *mut SP_DEVICE_INTERFACE_DETAIL_DATA_A = &mut data;
+
+    if unsafe { !SetupDiGetDeviceInterfaceDetailA(
+        device_info_list_handle, 
+        p_interface_data as *mut Void,
+        p_data as *mut Void, 
+        required_size, 
+        p_required_size, 
+        std::ptr::null_mut()) }
+    {
+        let windows_error = unsafe { GetLastError() };
+        if windows_error != 122
+        {
+            let error_line = line!();
+            let win_err = format!("Windows Error: {} at line: {}", windows_error, error_line);
+            return Err(SomethingSomething::WinError(win_err))
+        }
+    }
+    
+    Ok(data)
+}
 
 
 #[link(name="SetupApi")]
