@@ -325,7 +325,8 @@ fn read_data(device: &HidDevice) -> Result<Vec<HIDP_DATA>,SomethingSomething>
 }
 
 
-fn to_wide_string(string: &str) -> Vec<u16> {
+fn to_wide_string(string: &str) -> Vec<u16> 
+{
     let v: Vec<u16> = OsStr::new(string)
         .encode_wide()
         .chain(Some(0).into_iter())
@@ -333,6 +334,9 @@ fn to_wide_string(string: &str) -> Vec<u16> {
     v
 }
 
+/// Returns a pointer to preparsed data of the given device handle.
+/// Preparsed data is an opaque C struct we retrieve from win32 api.
+/// This data is necessary for other win32 functions.
 fn hid_get_preparsed_data(device_handle: *mut Void) -> Result<*mut Void, SomethingSomething>
 {
     let mut preparsed_data: *mut Void = std::ptr::null_mut();
@@ -373,6 +377,7 @@ fn create_file_w(
     }
 
 }
+
 
 fn setup_di_get_device_interface_detail_a(
     device_info_list_handle: *mut Void, 
