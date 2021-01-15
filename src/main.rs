@@ -37,10 +37,37 @@
 use std::ptr;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
+use std::fmt::{Debug, Display, self};
+
 
 type Void = std::ffi::c_void;
 type WcharT = u16;
 type DWord = u32;
+
+#[derive(Debug)]
+enum SomethingSomething
+{
+    WinError(String),
+    Other(String),
+    ParseError(std::string::FromUtf8Error),
+}
+
+impl Display for SomethingSomething
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result
+    {
+        write!(f, "yee")
+    }
+}
+
+impl From<std::string::FromUtf8Error> for SomethingSomething
+{
+    fn from(error: std::string::FromUtf8Error) -> Self
+    {
+        SomethingSomething::ParseError(error)
+    }
+}
+
 
 #[repr(C)]
 #[derive(Debug)]
@@ -53,11 +80,11 @@ struct GUID
 }
 
 #[repr(C)]
-struct SP_DEVICE_INTERFACE_DETAIL_DATA_W
+struct SP_DEVICE_INTERFACE_DETAIL_DATA_A
 {
     cb_size: u32,
     // MAX_PATH = 256 bytes thus it cant exceed this. Needs a way to proper fitted
-    device_path: [u16; 256],
+    device_path: [u8; 256],
 }
 
 #[repr(C)]
@@ -146,7 +173,6 @@ impl std::fmt::Debug for HIDP_DATA_VALUE
             match &self
             {
                 HIDP_DATA_VALUE { raw_value: v} => f.write_str(&format!("{}", v)),
-                HIDP_DATA_VALUE { on: v} => f.write_str(&format!("{}", v)),
             }
         }
     }
@@ -155,9 +181,10 @@ impl std::fmt::Debug for HIDP_DATA_VALUE
 
 struct HidDevice
 {
-    device_path: std::ffi::CString,
+    device_path: Vec<u16>,
     hid_device_handle: *mut Void,
     caps: HIDP_CAPS,
+    preparsed_data: *mut Void,
 }
 
 // Do we use this considering the C type is u32?
@@ -169,7 +196,7 @@ enum _HIDP_REPORT_TYPE
     HidPFeature = 2,
 }
 
-fn main()
+fn main() -> Result<(), SomethingSomething>
 {
     // Get the Hid (human interface devices) guid from win32 call
     let mut hid_guid = std::mem::MaybeUninit::<GUID>::uninit();
@@ -211,7 +238,7 @@ fn main()
         member += 1;
     }
 
-    let mut devices: Vec<HidDevice> = Vec::with_capacity(interface_data.len() as usize);
+    let mut _devices: Vec<HidDevice> = Vec::with_capacity(interface_data.len() as usize);
 
     println!("Ammount of interfaces in SetupDiEnumDeviceInterfaces: {}", interface_data.len());
 
@@ -223,7 +250,7 @@ fn main()
 
         let p_required_size: *mut u32 = &mut required_size;
 
-        unsafe { SetupDiGetDeviceInterfaceDetailW(
+        unsafe { SetupDiGetDeviceInterfaceDetailA(
             device_info_list_handle, 
             p_interface_data as *mut Void,
             std::ptr::null_mut(), 
@@ -231,32 +258,27 @@ fn main()
             p_required_size, 
             std::ptr::null_mut()) };
         
-        let mut data = SP_DEVICE_INTERFACE_DETAIL_DATA_W { cb_size: 8 as u32, device_path: [0;256]};
+        let mut data = SP_DEVICE_INTERFACE_DETAIL_DATA_A { cb_size: 8 as u32, device_path: [0;256]};
 
-        let p_data: *mut SP_DEVICE_INTERFACE_DETAIL_DATA_W = &mut data;
+        let p_data: *mut SP_DEVICE_INTERFACE_DETAIL_DATA_A = &mut data;
 
-        unsafe { SetupDiGetDeviceInterfaceDetailW(
+        unsafe { SetupDiGetDeviceInterfaceDetailA(
             device_info_list_handle, 
             p_interface_data as *mut Void,
             p_data as *mut Void, 
             required_size, 
             p_required_size, 
             std::ptr::null_mut()) };
-        Check!("SetupDiGetDeviceInterfaceDetailW 2");
+        Check!("SetupDiGetDeviceInterfaceDetailA 2");
 
-        let mut n = "".to_owned();
+        let n = String::from_utf8(data.device_path.to_vec())?;
 
-        for i in data.device_path.iter()
-        {
-            n.push(std::char::from_u32(*i as u32).unwrap())
-        }
-    
         let n_ref = n.trim_matches('\u{0}');
         
         let filename = to_wide_string(n_ref);
 
         //Create handle from device_path to use for calls
-        let handle = create_file_w(
+        let valid_device_handle = create_file_w(
             filename.as_ptr(), //filename
             0x80000000 | 0x40000000, // GENERIC_READ | GENERIC_WRITE
             0x00000001 | 0x00000002, // FILE_SHARE_READ | FILE_SHARE_WRITE
@@ -264,26 +286,12 @@ fn main()
             3, // OPEN_EXISTING
             0, //
             std::ptr::null_mut() // No template necessary
-        );
-
-        if let Ok(valid_device_handle) = handle
-        {
-        
+        )?;
+    
             // Error 5 Error_access_Denied -> Access is denied
             // Error 32 Error Sharing Violation -> Process being used by another process
 
-            // let mut attributes = HIDD_ATTRIBUTES { size: std::mem::size_of::<HIDD_ATTRIBUTES>() as u32, product_id: 0, vendor_id: 0, version_number: 0 };
-        
-        
-            // if unsafe { HidD_GetAttributes(valid_device_handle, attributes.as_mut_ptr())}
-            // {
-            //     println!("{}, {}, {}", attributes.product_id, attributes.vendor_id, attributes.version_number)
-            // }
-        
-            let mut preparsed_data: *mut Void = std::ptr::null_mut();
-
-            let mut p_preparsed_data: *mut *mut Void = &mut preparsed_data;
-            if unsafe { HidD_GetPreparsedData(valid_device_handle, p_preparsed_data) }
+            if let Ok(preparsed_data) = hid_get_preparsed_data(valid_device_handle)
             {
 
                 let mut capabilities = std::mem::MaybeUninit::<HIDP_CAPS>::uninit();
@@ -292,55 +300,50 @@ fn main()
                 Check!("Get Caps");
                 let caps = unsafe { capabilities.assume_init() };
 
-                if caps.usage_id == 5
-                {                    
-                    println!("{}", i);
-                    println!("{:?}", n_ref);
-                    println!("{:?}", caps);
-                    let mut report_buffer = vec![0u8; caps.input_report_byte_length as usize];
-                    let mut bytesread = 0;
-                    let p_bytes_read: *mut u32 = &mut bytesread;
-                    unsafe { HidD_FlushQueue(valid_device_handle) };
-                    println!("{}", unsafe { ReadFile(valid_device_handle, report_buffer.as_mut_ptr() as *mut Void, caps.input_report_byte_length as u32, p_bytes_read, std::ptr::null_mut())});
-                    Check!("Get Input_report");
-                    println!("{:?}, {}", report_buffer, bytesread);
-                    //Might not be needed since it seems to be the same as caps.number_input_data_indices
-                    let max_data = unsafe { HidP_MaxDataListLength(0, preparsed_data) };
-                    let p_max_data: *const u32 = &max_data;
-                    let mut data_buffer = vec![HIDP_DATA {data_index: 0, reserved: 0, data: HIDP_DATA_VALUE { on: true} }; max_data as usize];
+                let device = HidDevice {caps, hid_device_handle: valid_device_handle, preparsed_data, device_path: filename};
 
-                    // Maybe bad FFI buffer, return value of button in the on state (0) wierd
-                    println!("{}", unsafe { HidP_GetData(0, data_buffer.as_mut_ptr() as *mut Void, p_max_data, preparsed_data, report_buffer.as_mut_ptr() as *mut Void, caps.input_report_byte_length as u32)});
-                    Check!("Get data");
-
-                    println!("{:?}", data_buffer);
-
+                if device.caps.usage_id == 5
+                {                
+                    read_data(&device)?;
                 }
-
-                unsafe { HidD_FreePreparsedData(preparsed_data); }
             }
             else
             {
                 Check!("Get Preparsed data");
             }
             unsafe { CloseHandle(valid_device_handle)};
-        }
+        
     }
-
-    // END TEST STUFF
-
-
-    //HidD_getinputReport
-
-    //HidD_GetData
-
-    //Parse Data
-    
-
-
     unsafe { hid_guid.assume_init() };
     unsafe { SetupDiDestroyDeviceInfoList(device_info_list_handle) };
+
+    Ok(())
 }
+
+fn read_data(device: &HidDevice) -> Result<Vec<HIDP_DATA>,SomethingSomething>
+{
+    unsafe {HidD_FlushQueue(device.hid_device_handle);}
+
+    let mut report_buffer = vec![0u8; device.caps.input_report_byte_length as usize];
+    let mut bytesread = 0;
+    let p_bytes_read: *mut u32 = &mut bytesread;
+
+    if unsafe { !ReadFile(device.hid_device_handle, report_buffer.as_mut_ptr() as *mut Void, device.caps.input_report_byte_length as u32, p_bytes_read, std::ptr::null_mut())}
+    {
+        Check!("readfile");
+    }
+
+
+    //Might not be needed since it seems to be the same as caps.number_input_data_indices
+    let max_data = unsafe { HidP_MaxDataListLength(0, device.preparsed_data) };
+    let p_max_data: *const u32 = &max_data;
+    let mut data_buffer = vec![HIDP_DATA {data_index: 0, reserved: 0, data: HIDP_DATA_VALUE { on: true} }; max_data as usize];
+    
+    // Maybe bad FFI buffer, return value of button in the on state (0) wierd
+    unsafe { HidP_GetData(0, data_buffer.as_mut_ptr() as *mut Void, p_max_data, device.preparsed_data, report_buffer.as_mut_ptr() as *mut Void, device.caps.input_report_byte_length as u32)};
+    Ok(data_buffer)
+}
+
 
 fn to_wide_string(string: &str) -> Vec<u16> {
     let v: Vec<u16> = OsStr::new(string)
@@ -350,7 +353,20 @@ fn to_wide_string(string: &str) -> Vec<u16> {
     v
 }
 
-//Maybe rename to create_file_safe when containing FFI function?
+fn hid_get_preparsed_data(device_handle: *mut Void) -> Result<*mut Void, SomethingSomething>
+{
+    let mut preparsed_data: *mut Void = std::ptr::null_mut();
+    let p_preparsed_data: *mut *mut Void = &mut preparsed_data;
+
+    if unsafe { !HidD_GetPreparsedData(device_handle, p_preparsed_data) }
+    {
+        let windows_error = unsafe { GetLastError() };
+        return Err(SomethingSomething::WinError(windows_error.to_string()));
+    }
+    Ok(preparsed_data)
+}
+
+
 fn create_file_w(
     lp_file_name: *const WcharT,
     dw_desired_access: DWord,
@@ -359,7 +375,7 @@ fn create_file_w(
     dw_creation_disposition: DWord,
     dw_flags_and_attributes: DWord,
     h_template_file: *mut Void,
-) -> Result<*mut Void, String>
+) -> Result<*mut Void, SomethingSomething>
 {
     let expected_errors = [0];
     let handle = unsafe { CreateFileW(lp_file_name, dw_desired_access, dw_share_mode, lp_security_attributes, dw_creation_disposition, dw_flags_and_attributes, h_template_file) };
@@ -372,7 +388,7 @@ fn create_file_w(
     }
     else
     {
-        return Err(windows_error.to_string())
+        return Err(SomethingSomething::WinError(windows_error.to_string()))
     }
 
 }
@@ -408,7 +424,7 @@ fn create_file_w(
 #[link(name="SetupApi")]
 extern "system"
 {
-    fn SetupDiGetDeviceInterfaceDetailW(
+    fn SetupDiGetDeviceInterfaceDetailA(
         DeviceInfoSet: *mut Void, 
         DeviceInterfaceData: *mut Void, 
         DeviceInterfaceDetailData: *mut Void,
@@ -472,7 +488,7 @@ extern "system"
 
     fn HidD_GetPreparsedData(HidDeviceObject: *const Void, PHIDP_PREPARSED_DATA: *mut *mut Void) -> bool;
 
-    fn HidD_FreePreparsedData(PHIDP_PREPARSED_DATA: *mut Void) -> bool;
+    fn _HidD_FreePreparsedData(PHIDP_PREPARSED_DATA: *mut Void) -> bool;
 
     fn HidP_GetCaps(PHIDP_PREPARSED_DATA: *mut Void, Capabilities: *mut Void) -> i16;
 
