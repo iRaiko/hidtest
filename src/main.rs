@@ -153,15 +153,16 @@ impl std::fmt::Debug for HIDP_DATA_VALUE
 
 }
 
-struct _HidDevice
+struct HidDevice
 {
     device_path: std::ffi::CString,
     hid_device_handle: *mut Void,
+    caps: HIDP_CAPS,
 }
 
 // Do we use this considering the C type is u32?
 #[repr(C)]
-enum HIDP_REPORT_TYPE
+enum _HIDP_REPORT_TYPE
 {
     HidPInput = 0,
     HidPOutput = 1,
@@ -210,8 +211,10 @@ fn main()
         member += 1;
     }
 
+    let mut devices: Vec<HidDevice> = Vec::with_capacity(interface_data.len() as usize);
+
     println!("Ammount of interfaces in SetupDiEnumDeviceInterfaces: {}", interface_data.len());
-    let mut device_paths: Vec<String> = Vec::with_capacity(interface_data.len() as usize);
+
     for i in 0..interface_data.len()
     {
         let p_interface_data: *mut SP_DEVICE_INTERFACE_DATA = &mut interface_data[i];
@@ -247,11 +250,10 @@ fn main()
         {
             n.push(std::char::from_u32(*i as u32).unwrap())
         }
-
-        device_paths.push(n.trim_matches('\u{0}').to_owned());
     
+        let n_ref = n.trim_matches('\u{0}');
         
-        let filename = to_wide_string(&device_paths[i]);
+        let filename = to_wide_string(n_ref);
 
         //Create handle from device_path to use for calls
         let handle = create_file_w(
@@ -293,7 +295,7 @@ fn main()
                 if caps.usage_id == 5
                 {                    
                     println!("{}", i);
-                    println!("{:?}", device_paths[i]);
+                    println!("{:?}", n_ref);
                     println!("{:?}", caps);
                     let mut report_buffer = vec![0u8; caps.input_report_byte_length as usize];
                     let mut bytesread = 0;
