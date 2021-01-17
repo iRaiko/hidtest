@@ -39,10 +39,15 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::fmt::{Debug, Display, self};
 
-
 type Void = std::ffi::c_void;
 type WcharT = u16;
 type DWord = u32;
+// https://docs.microsoft.com/en-us/windows/win32/winprog/windows-data-types
+type Bool = std::os::raw::c_int;
+type Boolean = std::os::raw::c_uchar;
+type Long = std::os::raw::c_long;
+type ULong = std::os::raw::c_ulong;
+type NTStatus = Long;
 
 #[derive(Debug)]
 enum SomethingSomething
@@ -101,7 +106,7 @@ struct SECURITY_ATTRIBUTES
 {
     n_length: DWord,
     lp_security_descriptor: *mut Void,
-    b_inherit_handle: bool
+    b_inherit_handle: Bool
 }
 
 #[repr(C)]
@@ -160,7 +165,7 @@ struct HIDP_DATA
 #[derive(Clone, Copy)]
 union HIDP_DATA_VALUE
 {
-    raw_value: u32,
+    raw_value: std::os::raw::c_int,
     on: bool,
 }
 
@@ -217,14 +222,11 @@ fn main() -> Result<(), SomethingSomething>
 
     let mut interface_data = Vec::new();
 
-    let mut has_interface = true;
-
     let mut member = 0u32;
 
-    // Has interface stays true untill SetupDiEnumDeviceInterfaces returns false, which indicates there are no more devices in the enum
+    // Run until SetupDiEnumDeviceInterfaces returns false, which indicates there are no more devices in the enum
     // Get last error returns 87, invalid parameter as outside of range
-    while has_interface
-    {    
+    loop {    
         let mut data = SP_DEVICE_INTERFACE_DATA{
             cb_size: std::mem::size_of::<SP_DEVICE_INTERFACE_DATA>() as DWord,
             interface_class_guid: GUID { data1: 0, data2: 0, data3: 0, data4: [0,0,0,0,0,0,0,0]},
@@ -232,7 +234,10 @@ fn main() -> Result<(), SomethingSomething>
             reserved: 0,
         };
         let p_data: *mut SP_DEVICE_INTERFACE_DATA = &mut data;
-        has_interface = unsafe { SetupDiEnumDeviceInterfaces(device_info_list_handle, std::ptr::null_mut(), hid_guid.as_ptr(), member, p_data as *mut Void)};
+        let success = unsafe { SetupDiEnumDeviceInterfaces(device_info_list_handle, std::ptr::null_mut(), hid_guid.as_ptr(), member, p_data as *mut Void)};
+		if 0 == success {
+			break;
+		}
         Check!("SetupDiEnumDeviceInterfaces");
         interface_data.push(data);
         member += 1;
@@ -308,7 +313,7 @@ fn read_data(device: &HidDevice) -> Result<Vec<HIDP_DATA>,SomethingSomething>
     let mut bytesread = 0;
     let p_bytes_read: *mut u32 = &mut bytesread;
 
-    if unsafe { !ReadFile(device.hid_device_handle, report_buffer.as_mut_ptr() as *mut Void, device.caps.input_report_byte_length as u32, p_bytes_read, std::ptr::null_mut())}
+    if unsafe { 0 == ReadFile(device.hid_device_handle, report_buffer.as_mut_ptr() as *mut Void, device.caps.input_report_byte_length as u32, p_bytes_read, std::ptr::null_mut())}
     {
         Check!("readfile");
     }
@@ -342,7 +347,7 @@ fn hid_get_preparsed_data(device_handle: *mut Void) -> Result<*mut Void, Somethi
     let mut preparsed_data: *mut Void = std::ptr::null_mut();
     let p_preparsed_data: *mut *mut Void = &mut preparsed_data;
 
-    if unsafe { !HidD_GetPreparsedData(device_handle, p_preparsed_data) }
+    if unsafe { 0 == HidD_GetPreparsedData(device_handle, p_preparsed_data) }
     {
         let windows_error = unsafe { GetLastError() };
         return Err(SomethingSomething::WinError(windows_error.to_string()));
@@ -407,7 +412,7 @@ fn setup_di_get_device_interface_detail_a(
 
     let p_data: *mut SP_DEVICE_INTERFACE_DETAIL_DATA_A = &mut data;
 
-    if unsafe { !SetupDiGetDeviceInterfaceDetailA(
+    if unsafe { 0 == SetupDiGetDeviceInterfaceDetailA(
         device_info_list_handle, 
         p_interface_data as *mut Void,
         p_data as *mut Void, 
@@ -438,7 +443,7 @@ extern "system"
         DeviceInterfaceDetailDataSize: DWord,
         RequiredSize: *const DWord,
         DeviceInfoData: *mut Void,
-    ) -> bool;
+    ) -> Bool;
 
     fn SetupDiEnumDeviceInterfaces(
         DeviceInfoSet: *mut Void,
@@ -446,7 +451,7 @@ extern "system"
         InterfaceClassGuid: *const GUID,
         MemberIndex: DWord,
         DeviceInterfaceData: *mut Void,
-    ) -> bool;
+    ) -> Bool;
 
 
 
@@ -455,13 +460,13 @@ extern "system"
     
     // handle is a Device Info Set Handle
     // Destroy Dev info set to free up resources
-    fn SetupDiDestroyDeviceInfoList(handle: *const Void) -> bool;
+    fn SetupDiDestroyDeviceInfoList(handle: *const Void) -> Bool;
 }
 
 #[link(name = "kernel32")]
 extern "system"
 {
-    fn CloseHandle(handle: *const Void) -> bool;
+    fn CloseHandle(handle: *const Void) -> Bool;
 
     fn CreateFileW(
         lp_file_name: *const WcharT,
@@ -479,7 +484,7 @@ extern "system"
         n_number_of_bytes_to_read: DWord,
         lp_number_of_byte_read: *const DWord,
         lp_overlapped: *const Void,
-    ) -> bool;
+    ) -> Bool;
 
     fn GetLastError() -> DWord;
 }
@@ -489,23 +494,23 @@ extern "system"
 {
     fn HidD_GetHidGuid(HidGuid: *mut GUID);
 
-    fn _HidD_GetPhysicalDescriptor(HidDeviceObject: *const Void, Buffer: *mut Void, BufferLength: u32) -> bool;
+    fn _HidD_GetPhysicalDescriptor(HidDeviceObject: *const Void, Buffer: *mut Void, BufferLength: u32) -> Boolean;
 
-    fn _HidD_GetAttributes(HidDeviceObject: *const Void, Attributes: *mut _HIDD_ATTRIBUTES) -> bool;
+    fn _HidD_GetAttributes(HidDeviceObject: *const Void, Attributes: *mut _HIDD_ATTRIBUTES) -> Boolean;
 
-    fn HidD_GetPreparsedData(HidDeviceObject: *const Void, PHIDP_PREPARSED_DATA: *mut *mut Void) -> bool;
+    fn HidD_GetPreparsedData(HidDeviceObject: *const Void, PHIDP_PREPARSED_DATA: *mut *mut Void) -> Boolean;
 
-    fn _HidD_FreePreparsedData(PHIDP_PREPARSED_DATA: *mut Void) -> bool;
+    fn _HidD_FreePreparsedData(PHIDP_PREPARSED_DATA: *mut Void) -> Boolean;
 
-    fn HidP_GetCaps(PHIDP_PREPARSED_DATA: *mut Void, Capabilities: *mut Void) -> i16;
+    fn HidP_GetCaps(PHIDP_PREPARSED_DATA: *mut Void, Capabilities: *mut Void) -> NTStatus;
 
-    fn _HidD_GetInputReport(HidDeviceObject: *const Void, ReportBuffer: *mut Void, ReportBufferLength: u32) -> bool;
+    fn _HidD_GetInputReport(HidDeviceObject: *const Void, ReportBuffer: *mut Void, ReportBufferLength: u32) -> Boolean;
 
-    fn HidP_GetData(ReportType: u32, DataList: *mut Void, DataLength: *const u32, PHIDP_PREPARSED_DATA: *mut Void, Report: *mut Void, ReportLength: u32) -> i16;
+    fn HidP_GetData(ReportType: u32, DataList: *mut Void, DataLength: *const u32, PHIDP_PREPARSED_DATA: *mut Void, Report: *mut Void, ReportLength: u32) -> NTStatus;
 
-    fn HidP_MaxDataListLength(ReportType: u32, PHIDP_PREPARSED_DATA: *mut Void) -> u32;
+    fn HidP_MaxDataListLength(ReportType: u32, PHIDP_PREPARSED_DATA: *mut Void) -> ULong;
 
-    fn HidD_FlushQueue(HidDeviceObject: *const Void) -> bool;
+    fn HidD_FlushQueue(HidDeviceObject: *const Void) -> Boolean;
 }
 
 #[macro_export]
