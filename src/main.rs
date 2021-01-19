@@ -39,7 +39,6 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::fmt::{Debug, Display, self};
 
-
 type Void = std::ffi::c_void;
 type WcharT = u16;
 type DWord = u32;
@@ -48,7 +47,6 @@ type DWord = u32;
 enum SomethingSomething
 {
     WinError(String),
-    Other(String),
     ParseError(std::string::FromUtf8Error),
 }
 
@@ -179,11 +177,69 @@ impl std::fmt::Debug for HIDP_DATA_VALUE
 
 }
 
+#[repr(C)]
+struct HIDP_BUTTON_CAPS
+{
+    usage_page: u16,
+    report_id: u8,
+    is_alias: bool,
+    bit_field: u16,
+    link_collection: u16,
+    link_usage: u16,
+    link_usage_page: u16,
+    is_range: bool,
+    is_string_range: bool,
+    is_designator_range: bool,
+    is_absolute: bool,
+    reserved: [u32; 10],
+    maybe_range: NotRange
+}
+
+#[repr(C)]
+union NotRange
+{
+    not_range: HIDP_BUTTON_CAPS_NOT_RANGE,
+    range: HIDP_BUTTON_CAPS_RANGE,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct HIDP_BUTTON_CAPS_RANGE
+{
+    usage_min: u16,
+    usage_max: u16,
+    string_min: u16,
+    string_max: u16,
+    designator_min: u16,
+    designator_max: u16,
+    data_index_min: u16,
+    data_index_max: u16,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct HIDP_BUTTON_CAPS_NOT_RANGE
+{
+    usage: u16,
+    reserved1: u16,
+    string: u16,
+    reserved2: u16,
+    designator: u16,
+    reserved3: u16,
+    data_index: u16,
+    reserved4: u16,
+}
+
+#[repr(C)]
+struct HIDP_VALUE_CAPS
+{}
+
 struct HidDevice
 {
     device_path: Vec<u16>,
     hid_device_handle: *mut Void,
     caps: HIDP_CAPS,
+    button_caps: Vec<HIDP_BUTTON_CAPS>,
     preparsed_data: *mut Void,
 }
 
@@ -279,10 +335,16 @@ fn main() -> Result<(), SomethingSomething>
                 Check!("Get Caps");
                 let caps = unsafe { capabilities.assume_init() };
 
-                let device = HidDevice {caps, hid_device_handle: valid_device_handle, preparsed_data, device_path: filename};
+                if caps.usage_id == 5
+                {            
+                    let button_caps = hid_get_button_caps(preparsed_data, caps.number_input_button_caps)?;
 
-                if device.caps.usage_id == 5
-                {                
+                    let device = HidDevice {caps, hid_device_handle: valid_device_handle, preparsed_data, device_path: filename, button_caps};    
+
+                    for i in &device.button_caps
+                    {
+                        println!("{}, {}, {}", i.usage_page, i.report_id, i.is_range);
+                    }
                     println!("{:?}", read_data(&device)?);
                 }
             }
@@ -299,6 +361,11 @@ fn main() -> Result<(), SomethingSomething>
 
     Ok(())
 }
+
+// fn _enumerate_controllers() -> Result<Vec<HidDevice>, SomethingSomething>
+// {
+//     Ok(())
+// }
 
 fn read_data(device: &HidDevice) -> Result<Vec<HIDP_DATA>,SomethingSomething>
 {
@@ -319,7 +386,7 @@ fn read_data(device: &HidDevice) -> Result<Vec<HIDP_DATA>,SomethingSomething>
     let p_max_data: *const u32 = &max_data;
     let mut data_buffer = vec![HIDP_DATA {data_index: 0, reserved: 0, data: HIDP_DATA_VALUE { on: true} }; max_data as usize];
     
-    // Maybe bad FFI buffer, return value of button in the on state (0) wierd
+    // Maybe bad FFI buffer/union, return value of button in the on state (0) wierd
     unsafe { HidP_GetData(0, data_buffer.as_mut_ptr() as *mut Void, p_max_data, device.preparsed_data, report_buffer.as_mut_ptr() as *mut Void, device.caps.input_report_byte_length as u32)};
     Ok(data_buffer)
 }
@@ -350,6 +417,22 @@ fn hid_get_preparsed_data(device_handle: *mut Void) -> Result<*mut Void, Somethi
     Ok(preparsed_data)
 }
 
+fn hid_get_button_caps(preparsed_data: *mut Void, button_caps_length: u16) -> Result<Vec<HIDP_BUTTON_CAPS>, SomethingSomething>
+{
+    let mut button_caps: Vec<HIDP_BUTTON_CAPS> = Vec::with_capacity(button_caps_length.into());
+
+    let p_button_caps_length: *const u16 = &button_caps_length;
+
+    if unsafe { HidP_GetButtonCaps(0, button_caps.as_mut_ptr(), p_button_caps_length, preparsed_data) } != 0
+    {
+        let windows_error = unsafe { GetLastError() };
+
+        return Err(SomethingSomething::WinError(format!("{}", windows_error)));
+    }
+    println!("{}", unsafe { GetLastError() });
+    println!("{}", button_caps.len());
+    Ok(button_caps)
+}
 
 fn create_file_w(
     lp_file_name: *const WcharT,
@@ -378,7 +461,7 @@ fn create_file_w(
 
 }
 
-
+/// Given 
 fn setup_di_get_device_interface_detail_a(
     device_info_list_handle: *mut Void, 
     p_interface_data: *mut Void, 
@@ -506,6 +589,8 @@ extern "system"
     fn HidP_MaxDataListLength(ReportType: u32, PHIDP_PREPARSED_DATA: *mut Void) -> u32;
 
     fn HidD_FlushQueue(HidDeviceObject: *const Void) -> bool;
+
+    fn HidP_GetButtonCaps(ReportType: u32, ButtonCaps: *mut HIDP_BUTTON_CAPS, ButtonCapsLength: *const u16, PreparsedData: *mut Void) -> i16;
 }
 
 #[macro_export]
