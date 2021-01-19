@@ -184,33 +184,68 @@ impl std::fmt::Debug for HIDP_DATA_VALUE
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct HIDP_BUTTON_CAPS
 {
     usage_page: u16,
     report_id: u8,
-    is_alias: bool,
+    is_alias: Boolean,
     bit_field: u16,
     link_collection: u16,
     link_usage: u16,
     link_usage_page: u16,
-    is_range: bool,
-    is_string_range: bool,
-    is_designator_range: bool,
-    is_absolute: bool,
+    is_range: Boolean,
+    is_string_range: Boolean,
+    is_designator_range: Boolean,
+    is_absolute: Boolean,
     reserved: [u32; 10],
     maybe_range: NotRange
 }
 
-#[repr(C)]
-union NotRange
+impl HIDP_BUTTON_CAPS
 {
-    not_range: HIDP_BUTTON_CAPS_NOT_RANGE,
-    range: HIDP_BUTTON_CAPS_RANGE,
+    fn new() -> HIDP_BUTTON_CAPS
+    {
+        HIDP_BUTTON_CAPS
+        {
+            usage_page: 0,
+            report_id: 0,
+            is_alias: 0,
+            bit_field: 0,
+            link_collection: 0,
+            link_usage: 0,
+            link_usage_page: 0,
+            is_range: 0,
+            is_string_range: 0,
+            is_designator_range: 0,
+            is_absolute: 0,
+            reserved: [0,0,0,0,0,0,0,0,0,0],
+            maybe_range: NotRange { range: HIDP_CAPS_RANGE {            
+                usage_min: 0,
+                usage_max: 0,
+                string_min: 0,
+                string_max: 0,
+                designator_min: 0,
+                designator_max: 0,
+                data_index_min: 0,
+                data_index_max: 0,
+            }}
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+union NotRange
+{    
+    range: HIDP_CAPS_RANGE,
+    not_range: HIDP_CAPS_NOT_RANGE,
+
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-struct HIDP_BUTTON_CAPS_RANGE
+struct HIDP_CAPS_RANGE
 {
     usage_min: u16,
     usage_max: u16,
@@ -224,7 +259,7 @@ struct HIDP_BUTTON_CAPS_RANGE
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-struct HIDP_BUTTON_CAPS_NOT_RANGE
+struct HIDP_CAPS_NOT_RANGE
 {
     usage: u16,
     reserved1: u16,
@@ -237,8 +272,75 @@ struct HIDP_BUTTON_CAPS_NOT_RANGE
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
 struct HIDP_VALUE_CAPS
-{}
+{
+    usage_page: u16,
+    report_id: u8,
+    is_alias: Boolean,
+    bit_field: u16,
+    link_collection: u16,
+    link_usage: u16,
+    link_usage_page: u16,
+    is_range: Boolean,
+    is_string_range: Boolean,
+    is_designator_range: Boolean,
+    is_absolute: Boolean,
+    has_null: Boolean,
+    reserved: u8,
+    bit_size: u16,
+    report_count: u16,
+    reserved2: [u16; 5],
+    units_exp: u32,
+    units: u32,
+    logical_min: i32,
+    logical_max: i32,
+    physical_min: i32,
+    physical_max: i32,
+    maybe_range: NotRange
+}
+
+impl HIDP_VALUE_CAPS
+{
+    fn new() -> HIDP_VALUE_CAPS
+    {
+        HIDP_VALUE_CAPS
+        {
+            usage_page: 0,
+            report_id: 0,
+            is_alias: 0,
+            bit_field: 0,
+            link_collection: 0,
+            link_usage: 0,
+            link_usage_page: 0,
+            is_range: 0,
+            is_string_range: 0,
+            is_designator_range: 0,
+            is_absolute: 0,
+            has_null: 0,
+            reserved: 0,
+            bit_size: 0,
+            report_count: 0,
+            reserved2: [0,0,0,0,0],
+            units_exp: 0,
+            units: 0,
+            logical_min: 0,
+            logical_max: 0,
+            physical_min: 0,
+            physical_max: 0,
+            maybe_range: NotRange { range: HIDP_CAPS_RANGE {            
+                usage_min: 0,
+                usage_max: 0,
+                string_min: 0,
+                string_max: 0,
+                designator_min: 0,
+                designator_max: 0,
+                data_index_min: 0,
+                data_index_max: 0,
+            }}
+        }
+    }
+}
 
 struct HidDevice
 {
@@ -343,16 +445,40 @@ fn main() -> Result<(), SomethingSomething>
 
                 if caps.usage_id == 5
                 {            
+                    println!("{:?}", caps);
                     let button_caps = hid_get_button_caps(preparsed_data, caps.number_input_button_caps)?;
+
+                    let value_caps = hid_get_value_caps(preparsed_data, caps.number_input_value_caps)?;
 
                     let device = HidDevice {caps, hid_device_handle: valid_device_handle, preparsed_data, device_path: filename, button_caps};    
 
                     for i in &device.button_caps
                     {
-                        println!("{}, {}, {}", i.usage_page, i.report_id, i.is_range);
+                        println!("{}, {}, {}", i.usage_page, i.report_id, i.is_range != 0);
+                        println!("{:?}", unsafe { i.maybe_range.range })
                     }
-                    println!("{:?}", read_data(&device)?);
+
+                    for i in value_caps
+                    {
+                        println!("{}, {}, {}, {}, {}, {}, {}", i.usage_page, i.report_id, i.report_count, i.physical_min, i.physical_max, i.logical_min, i.logical_max);
+                        if i.is_range != 0
+                        {
+                            println!("{:?}", unsafe { i.maybe_range.range })
+                        }
+                        else
+                        {
+                            println!("{:?}", unsafe { i.maybe_range.not_range})
+                        }
+                    }
+
+                    let data = read_data(&device)?;
+                    for i in data
+                    {
+                        println!("{:?}", i);
+                    }
                 }
+
+                unsafe { HidD_FreePreparsedData(preparsed_data) };
             }
             else
             {
@@ -381,7 +507,7 @@ fn read_data(device: &HidDevice) -> Result<Vec<HIDP_DATA>,SomethingSomething>
     let mut bytesread = 0;
     let p_bytes_read: *mut u32 = &mut bytesread;
 
-    if unsafe { 0 == ReadFile(device.hid_device_handle, report_buffer.as_mut_ptr() as *mut Void, device.caps.input_report_byte_length as u32, p_bytes_read, std::ptr::null_mut())}
+    if unsafe { 0 == ReadFile(device.hid_device_handle, report_buffer.as_mut_ptr(), device.caps.input_report_byte_length as u32, p_bytes_read, std::ptr::null_mut())}
     {
         Check!("readfile");
     }
@@ -425,11 +551,11 @@ fn hid_get_preparsed_data(device_handle: *mut Void) -> Result<*mut Void, Somethi
 
 fn hid_get_button_caps(preparsed_data: *mut Void, button_caps_length: u16) -> Result<Vec<HIDP_BUTTON_CAPS>, SomethingSomething>
 {
-    let mut button_caps: Vec<HIDP_BUTTON_CAPS> = Vec::with_capacity(button_caps_length.into());
+    let mut button_caps = vec![HIDP_BUTTON_CAPS::new(); button_caps_length.into()];
 
     let p_button_caps_length: *const u16 = &button_caps_length;
 
-    if unsafe { HidP_GetButtonCaps(0, button_caps.as_mut_ptr(), p_button_caps_length, preparsed_data) } != 0
+    if unsafe { 0 == HidP_GetButtonCaps(0, button_caps.as_mut_ptr(), p_button_caps_length, preparsed_data) } 
     {
         let windows_error = unsafe { GetLastError() };
 
@@ -438,6 +564,23 @@ fn hid_get_button_caps(preparsed_data: *mut Void, button_caps_length: u16) -> Re
     println!("{}", unsafe { GetLastError() });
     println!("{}", button_caps.len());
     Ok(button_caps)
+}
+
+fn hid_get_value_caps(preparsed_data: *mut Void, value_caps_length: u16) -> Result<Vec<HIDP_VALUE_CAPS>, SomethingSomething>
+{
+    let mut value_caps = vec![HIDP_VALUE_CAPS::new(); value_caps_length.into()];
+
+    let p_value_caps_length: *const u16 = &value_caps_length;
+
+    if unsafe { 0 == HidP_GetValueCaps(0, value_caps.as_mut_ptr(), p_value_caps_length, preparsed_data) } 
+    {
+        let windows_error = unsafe { GetLastError() };
+
+        return Err(SomethingSomething::WinError(format!("{}", windows_error)));
+    }
+    println!("{}", unsafe { GetLastError() });
+    println!("{}", value_caps.len());
+    Ok(value_caps)
 }
 
 fn create_file_w(
@@ -564,7 +707,7 @@ extern "system"
 
     fn ReadFile(
         h_file: *const Void,
-        lp_buffer: *const Void,
+        lp_buffer: *mut u8,
         n_number_of_bytes_to_read: DWord,
         lp_number_of_byte_read: *const DWord,
         lp_overlapped: *const Void,
@@ -584,7 +727,7 @@ extern "system"
 
     fn HidD_GetPreparsedData(HidDeviceObject: *const Void, PHIDP_PREPARSED_DATA: *mut *mut Void) -> Boolean;
 
-    fn _HidD_FreePreparsedData(PHIDP_PREPARSED_DATA: *mut Void) -> Boolean;
+    fn HidD_FreePreparsedData(PHIDP_PREPARSED_DATA: *mut Void) -> Boolean;
 
     fn HidP_GetCaps(PHIDP_PREPARSED_DATA: *mut Void, Capabilities: *mut Void) -> NTStatus;
 
@@ -596,7 +739,9 @@ extern "system"
 
     fn HidD_FlushQueue(HidDeviceObject: *const Void) -> bool;
 
-    fn HidP_GetButtonCaps(ReportType: u32, ButtonCaps: *mut HIDP_BUTTON_CAPS, ButtonCapsLength: *const u16, PreparsedData: *mut Void) -> i16;
+    fn HidP_GetButtonCaps(ReportType: u32, ButtonCaps: *mut HIDP_BUTTON_CAPS, ButtonCapsLength: *const u16, PreparsedData: *mut Void) -> NTStatus;
+    
+    fn HidP_GetValueCaps(ReportType: u32, ValueCaps: *mut HIDP_VALUE_CAPS, ValueCapsLength: *const u16, PreparsedData: *mut Void) -> NTStatus;
 }
 
 #[macro_export]
